@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>ChatGPT Speak Test</title>
+    <style>
+    </style>
+</head>
+
+<body>
+    <button id="record_btn"></button>
+    <div id="main_container"></div>
+
+</body>
+<script>
+    let startRecode;
+    let stopRecodeAndRun;
+
+    document.addEventListener('DOMContentLoaded', () => {
+        main();
+    })
+
+    async function main() {
+        try {
+            const btn = document.getElementById('record_btn')
+            const div = document.getElementById('main_container')
+
+            let audioStream = null
+            let recorder = null
+            let blobPromise = null
+
+            // send blob
+            async function onResolveBlob(blob) {
+                // console.log("ok tmp.")
+                window._g = { blob }
+
+                const utf8Decoder = new TextDecoder("utf-8");
+
+                const fd = new FormData();
+                fd.append('file', blob)
+
+                const res = await fetch('/post_webm', { method: "POST", body: fd })
+                const { text, req_id } = await res.json()
+
+                console.log(text, req_id)
+                div.innerHTML += `<div class="mes_user">>${text}</div>`
+                const mesBot = document.createElement('div')
+                mesBot.class = "mes_bot"
+                div.appendChild(mesBot)
+
+
+
+                const res2 = await fetch(`/get_chat_res?req_id=${req_id}`)
+
+                const reader = await res2.body.getReader()
+
+                let chunk = ""
+                let speekRest = "";
+                speechCancel();
+                while (true) {
+                    const { value, done } = await reader.read()
+                    if (value) {
+                        const v = utf8Decoder.decode(value)
+                        console.log(v, done)
+                        chunk += v
+                        speekRest += v
+
+                        mesBot.innerText = chunk + "..."
+
+                        let idx = speekRest.indexOf("。")
+                        idx = Math.max(idx, speekRest.indexOf("\n"))
+
+                        if (idx !== -1) {
+                            const text = speekRest.substring(0, idx + 1)
+                            speech(text)
+                            speekRest = speekRest.substring(idx + 1)
+                        }
+                    }
+                    if (done) {
+                        mesBot.innerText = chunk
+                        speech(speekRest)
+                        break;
+                    }
+                }
+            }
+
+            async function stop() {
+                if (recorder) {
+                    recorder.stop();
+                }
+                if (audioStream) {
+                    // stop
+                    audioStream.getTracks().forEach(track => track.stop())
+                }
+                audioStream = null
+                recorder = null
+                blobPromise = null
+            }
+
+            async function startRecode() {
+                // stop();
+                if (!recorder) {
+                    const ret = await createRecorder();
+                    audioStream = ret.audioStream
+                    recorder = ret.recorder
+                    blobPromise = ret.blobPromise
+
+                    recorder.start(1000);
+                    console.log("start")
+                }
+            }
+            async function stopRecodeAndRun() {
+                if (recorder) {
+                    const bp = blobPromise;
+                    stop()
+                    console.log("stop")
+                    if (bp) {
+                        const blob = await bp;
+                        onResolveBlob(blob)
+                    }
+                }
+            }
+            btn.innerHTML="録音"
+            btn.addEventListener('click', () => {
+                if (!recorder) {
+                    btn.innerHTML="停止"
+                    startRecode()
+                } else {
+                    btn.innerHTML="録音"
+                    stopRecodeAndRun()
+                }
+            })
+
+        } catch (error) {
+            console.error(error);
+        }
+
+        async function createRecorder() {
+            const audioStream = await navigator.mediaDevices.getUserMedia({
+                video: false,
+                audio: true
+            })
+
+            const micStream = new MediaStream();
+            micStream.addTrack(audioStream.getAudioTracks()[0]);
+
+            let promiseRes = null
+            const blobPromise = new Promise((res) => { promiseRes = res })
+
+            const recorder = new MediaRecorder(micStream, { mimeType: 'audio/webm; codecs=opus' });
+            const chunks = [];
+
+            recorder.ondataavailable = (evt) => {
+                console.log("type=" + evt.data.type + " size=" + evt.data.size);
+                chunks.push(evt.data);
+            };
+            recorder.onstop = (evt) => {
+                console.log('micTestRecorder.onstop(), so playback');
+                // recorder = null;
+
+                const micTestBlob = new Blob(chunks, { type: "audio/webm" });
+                promiseRes(micTestBlob)
+            }
+
+            return { audioStream, recorder, blobPromise }
+        }
+
+        function speechCancel() {
+            window.speechSynthesis.cancel();
+        }
+        function speech(text) {
+            synthesis = window.speechSynthesis
+            utterance = new SpeechSynthesisUtterance(text);
+            synthesis.speak(utterance);
+        }
+    }
+</script>
+
+</html>
